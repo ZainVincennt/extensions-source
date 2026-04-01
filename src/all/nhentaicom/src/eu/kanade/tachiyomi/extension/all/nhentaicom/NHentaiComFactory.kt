@@ -1,75 +1,101 @@
-package eu.kanade.tachiyomi.extension.all.nhentaicom
+package eu.kanade.tachiyomi.extension.en.nhentai
 
-import eu.kanade.tachiyomi.multisrc.hentaihand.HentaiHand
-import eu.kanade.tachiyomi.source.Source
-import eu.kanade.tachiyomi.source.SourceFactory
+import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.network.GET
+import eu.kanade.tachiyomi.network.await
+import okhttp3.Headers
 import okhttp3.OkHttpClient
+import okhttp3.Request
+import org.json.JSONObject
 
-class NHentaiComFactory : SourceFactory {
-    override fun createSources(): List<Source> = listOf(
-        // https://nhentai.com/api/languages?per_page=50
-        NHentaiComAll(),
-        NHentaiComZh(),
-        NHentaiComEn(),
-        NHentaiComJa(),
-        NHentaiComNoText(),
-        NHentaiComAr(),
-        NHentaiComJv(),
-        NHentaiComBg(),
-        NHentaiComCs(),
-        NHentaiComUk(),
-        NHentaiComSk(),
-        NHentaiComEo(),
-        NHentaiComMn(),
-        NHentaiComLa(),
-        NHentaiComCeb(),
-        NHentaiComTl(),
-        NHentaiComFi(),
-        NHentaiComTr(),
-        NHentaiComSr(),
-        NHentaiComEl(),
-        NHentaiComKo(),
-        NHentaiComRo(),
-    )
-}
-abstract class NHentaiComCommon(
-    override val lang: String,
-    hhLangId: List<Int> = emptyList(),
-    // altLangId: Int? = null
-) : HentaiHand("nHentai.com (unoriginal)", "https://nhentai.com", lang, false, hhLangId) {
-    override val client: OkHttpClient = network.cloudflareClient.newBuilder()
-        .addInterceptor { authIntercept(it) }
+class Nhentai : HttpSource() {
+
+    override val name = "Nhentai"
+    override val baseUrl = "https://nhentai.net"
+    override val lang = "en"
+    override val supportsLatest = true
+
+    override val client: OkHttpClient = network.client.newBuilder()
+        .addInterceptor { chain ->
+            val request = chain.request().newBuilder()
+                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+                .header("Referer", baseUrl)
+                .build()
+
+            val response = chain.proceed(request)
+
+            if (response.code == 429) {
+                Thread.sleep(1500)
+                chain.proceed(request)
+            } else response
+        }
         .build()
-}
 
-class NHentaiComAll : NHentaiComCommon("all") {
-    override val id: Long = 9165839893600661480
-}
+    override fun headersBuilder(): Headers.Builder {
+        return super.headersBuilder()
+            .add("User-Agent", "Mozilla/5.0")
+            .add("Referer", baseUrl)
+    }
 
-class NHentaiComZh : NHentaiComCommon("zh", listOf(1))
-class NHentaiComEn : NHentaiComCommon("en", listOf(2)) {
-    override val id: Long = 5591830863732393712
+    override fun popularMangaRequest(page: Int) =
+        GET("$baseUrl/api/galleries/all?page=$page", headers)
+
+    override fun popularMangaParse(response: okhttp3.Response) =
+        parseGalleryList(response)
+
+    override fun latestUpdatesRequest(page: Int) =
+        GET("$baseUrl/api/galleries/all?page=$page", headers)
+
+    override fun latestUpdatesParse(response: okhttp3.Response) =
+        parseGalleryList(response)
+
+    private fun parseGalleryList(response: okhttp3.Response): List<SManga> {
+        val json = JSONObject(response.body!!.string())
+        val result = mutableListOf<SManga>()
+
+        val array = json.getJSONArray("result")
+        for (i in 0 until array.length()) {
+            val obj = array.getJSONObject(i)
+            val manga = SManga.create()
+            manga.title = obj.getString("title")
+            manga.url = "/g/${obj.getInt("id")}"
+            manga.thumbnail_url = "https://t.nhentai.net/galleries/${obj.getInt("media_id")}/cover.jpg"
+            result.add(manga)
+        }
+        return result
+    }
+
+    override fun mangaDetailsRequest(manga: SManga) =
+        GET("$baseUrl/api/gallery/${manga.url.substringAfterLast("/")}", headers)
+
+    override fun mangaDetailsParse(response: okhttp3.Response): SManga {
+        val json = JSONObject(response.body!!.string())
+        val manga = SManga.create()
+        manga.title = json.getJSONObject("title").getString("pretty")
+        return manga
+    }
+
+    override fun chapterListParse(response: okhttp3.Response): List<SChapter> {
+        val json = JSONObject(response.body!!.string())
+        val chapter = SChapter.create()
+        chapter.name = "Chapter"
+        chapter.url = "/g/${json.getInt("id")}"
+        return listOf(chapter)
+    }
+
+    override fun pageListParse(response: okhttp3.Response): List<Page> {
+        val json = JSONObject(response.body!!.string())
+        val pages = mutableListOf<Page>()
+        val mediaId = json.getString("media_id")
+        val images = json.getJSONObject("images").getJSONArray("pages")
+
+        for (i in 0 until images.length()) {
+            val ext = images.getJSONObject(i).getString("t")
+            val url = "https://i.nhentai.net/galleries/$mediaId/${i + 1}.$ext"
+            pages.add(Page(i, "", url))
+        }
+        return pages
+    }
+
+    override fun imageUrlParse(response: okhttp3.Response) = ""
 }
-class NHentaiComJa : NHentaiComCommon("ja", listOf(3))
-class NHentaiComNoText : NHentaiComCommon("other", listOf(4)) {
-    override val id: Long = 5817327335315373850
-}
-class NHentaiComAr : NHentaiComCommon("ar", listOf(5))
-class NHentaiComJv : NHentaiComCommon("jv", listOf(6))
-class NHentaiComBg : NHentaiComCommon("bg", listOf(7))
-class NHentaiComCs : NHentaiComCommon("cs", listOf(8)) {
-    override val id: Long = 1144495813995437124
-}
-class NHentaiComUk : NHentaiComCommon("uk", listOf(9))
-class NHentaiComSk : NHentaiComCommon("sk", listOf(10))
-class NHentaiComEo : NHentaiComCommon("eo", listOf(11))
-class NHentaiComMn : NHentaiComCommon("mn", listOf(12))
-class NHentaiComLa : NHentaiComCommon("la", listOf(13))
-class NHentaiComCeb : NHentaiComCommon("ceb", listOf(14))
-class NHentaiComTl : NHentaiComCommon("tl", listOf(15))
-class NHentaiComFi : NHentaiComCommon("fi", listOf(16))
-class NHentaiComTr : NHentaiComCommon("tr", listOf(17))
-class NHentaiComSr : NHentaiComCommon("sr", listOf(18))
-class NHentaiComEl : NHentaiComCommon("el", listOf(19))
-class NHentaiComKo : NHentaiComCommon("ko", listOf(20))
-class NHentaiComRo : NHentaiComCommon("ro", listOf(21))
